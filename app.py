@@ -117,6 +117,7 @@ def recommend_by_name(df, cosine_sim, indices, name, top_n=10):
 def hybrid_recommend(df, cosine_sim, indices, pid, top_n=10):
     if pid not in indices.index: return None
     idx = indices[pid]
+    target_price = df.loc[idx, "price_num"]  # Harga produk target
     scores = list(enumerate(cosine_sim[idx]))
     scores = sorted(scores, key=lambda x: x[1], reverse=True)[1:50]
     rec_idx = [i for i,_ in scores]
@@ -124,9 +125,17 @@ def hybrid_recommend(df, cosine_sim, indices, pid, top_n=10):
                         "count_sold","stock","shop_location","popularity_score"] if c in df.columns]
     base = df.loc[rec_idx, cols].copy().reset_index(drop=True)
     base["similarity"] = [s for _,s in scores]
+    # Popularity normalization
     pmin, pmax = base["popularity_score"].min(), base["popularity_score"].max()
     base["popularity_norm"] = (base["popularity_score"]-pmin)/(pmax-pmin) if pmax>pmin else 0
-    base["hybrid_score"] = 0.75*base["similarity"] + 0.25*base["popularity_norm"]
+    # Price Similarity
+    max_price = df["price_num"].max()
+    if max_price > 0 and not pd.isna(target_price):
+        base["price_similarity"] = 1 - (abs(base["price_num"] - target_price) / max_price)
+    else:
+        base["price_similarity"] = 0
+    # Hybrid Score: 60% Text + 20% Price + 20% Popularity
+    base["hybrid_score"] = 0.60*base["similarity"] + 0.20*base["price_similarity"] + 0.20*base["popularity_norm"]
     return base.sort_values("hybrid_score", ascending=False).head(top_n)
 
 def hybrid_by_name(df, cosine_sim, indices, name, top_n=10):
@@ -339,12 +348,12 @@ def main():
                 "Produk niche / spesifik"
             ],
             "Hybrid Ranking": [
-                "75% Similarity + 25% Popularity",
-                "0.75×sim + 0.25×pop_norm",
+                "60% Similarity + 20% Price + 20% Popularity",
+                "0.60×sim + 0.20×price_sim + 0.20×pop_norm",
                 f"{hy_mean:.1%}",
-                "Mempertimbangkan rating & penjualan",
-                "Popularitas bisa menggeser relevansi",
-                "Produk mainstream"
+                "Mempertimbangkan harga, rating & penjualan",
+                "Bobot banyak bisa menggeser relevansi teks",
+                "Produk mainstream dengan harga relevan"
             ]
         }
         st.dataframe(pd.DataFrame(comp_data), use_container_width=True, hide_index=True)
@@ -356,9 +365,10 @@ def main():
         Precision@10 di sini diukur berdasarkan *kesamaan kategori*. Karena Content-Based murni mengandalkan
         kemiripan konten (TF-IDF), ia cenderung merekomendasikan produk dari kategori yang **persis sama**.
 
-        Hybrid Ranking menambahkan faktor popularitas (rating × 0.7 + log(penjualan) × 0.3), yang bisa
-        menyebabkan produk populer dari kategori **berbeda** masuk ke Top-10. Ini bukan berarti Hybrid
-        lebih buruk — hanya menggunakan **kriteria berbeda** yang lebih beragam.
+        Hybrid Ranking menggabungkan tiga faktor: kemiripan teks (60%), kemiripan harga (20%), dan
+        popularitas produk (20%). Faktor harga dan popularitas bisa menyebabkan produk dari kategori
+        **berbeda** masuk ke Top-10 jika harganya mirip dan populer. Ini bukan berarti Hybrid
+        lebih buruk — justru memberikan rekomendasi yang lebih **beragam dan realistis**.
         """)
 
     # ══════════════ TAB 4: METODOLOGI ══════════════
@@ -377,8 +387,9 @@ def main():
         st.markdown("Mengukur kemiripan antar produk berdasarkan sudut antara vektor TF-IDF.")
 
         st.markdown("### 4. Hybrid Score")
-        st.latex(r"\text{hybrid\_score} = 0.75 \times \text{similarity} + 0.25 \times \text{popularity\_norm}")
+        st.latex(r"\text{hybrid\_score} = 0.60 \times \text{sim} + 0.20 \times \text{price\_sim} + 0.20 \times \text{pop\_norm}")
         st.markdown("Dimana:")
+        st.latex(r"\text{price\_similarity} = 1 - \frac{|\text{harga\_produk} - \text{harga\_target}|}{\text{harga\_maksimum}}")
         st.latex(r"\text{popularity\_score} = 0.7 \times \text{rating} + 0.3 \times \log(1 + \text{count\_sold})")
 
         st.markdown("### 5. Evaluasi: Precision@K")
